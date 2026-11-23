@@ -192,6 +192,65 @@ int wmain(int argc, wchar_t* argv[])
 		return EXIT_FAILURE;
 	}
 
+	size_t fixedOptionalSize =
+		optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC
+		? offsetof(IMAGE_OPTIONAL_HEADER32, DataDirectory)
+		: offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory);
+
+	if ((size_t)fileHeader.SizeOfOptionalHeader < fixedOptionalSize)
+	{
+		fprintf(stderr, "[-] Truncated fixed optional header\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	size_t directoryCountOffset =
+		optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC
+		? offsetof(IMAGE_OPTIONAL_HEADER32, NumberOfRvaAndSizes)
+		: offsetof(IMAGE_OPTIONAL_HEADER64, NumberOfRvaAndSizes);
+
+	LARGE_INTEGER directoryCountPosition = { 0 };
+	directoryCountPosition.QuadPart =
+		optionalHeaderOffset + (LONGLONG)directoryCountOffset;
+
+	if (!SetFilePointerEx(hFile, directoryCountPosition, NULL, FILE_BEGIN))
+	{
+		fprintf(stderr, "[-] SetFilePointerEx(directory count) - E%lu\n",
+			GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	DWORD directoryCount = 0;
+	if (!ReadFile(hFile, &directoryCount, sizeof(directoryCount),
+		&dwBytesRead, NULL))
+	{
+		fprintf(stderr, "[-] ReadFile(directory count) - E%lu\n",
+			GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (dwBytesRead != sizeof(directoryCount))
+	{
+		fprintf(stderr, "[-] Incomplete directory count\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	size_t directoryCapacity =
+		((size_t)fileHeader.SizeOfOptionalHeader - fixedOptionalSize) /
+		sizeof(IMAGE_DATA_DIRECTORY);
+
+	if ((size_t)directoryCount > directoryCapacity)
+	{
+		fprintf(stderr, "[-] Data directories exceed optional header\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	printf("[+] Data-directory count: %lu\n", directoryCount);
+
 	size_t entryPointOffset =
 		optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC
 		? offsetof(IMAGE_OPTIONAL_HEADER32, AddressOfEntryPoint)
