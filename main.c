@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stddef.h> 
 #include <wchar.h>
+#include <stdlib.h>
 
 static BOOL WriteEditedCopy(
 	HANDLE input,
@@ -180,7 +181,7 @@ int wmain(int argc, wchar_t* argv[])
 	}
 	printf("[+] File size: %lld bytes\n", liFileSize.QuadPart);
 
-	if (liFileSize.QuadPart < sizeof(IMAGE_DOS_HEADER))
+	if (liFileSize.QuadPart < (LONGLONG)sizeof(IMAGE_DOS_HEADER))
 	{
 		fprintf(stderr, "[-] Invalid file size\n");
 		CloseHandle(hFile);
@@ -282,6 +283,13 @@ int wmain(int argc, wchar_t* argv[])
 	if (dwBytesRead != sizeof(fileHeader))
 	{
 		fprintf(stderr, "[-] Incomplete PE file header\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (!(fileHeader.Characteristics & IMAGE_FILE_EXECUTABLE_IMAGE))
+	{
+		fprintf(stderr, "[-] Executable-image characteristic is missing\n");
 		CloseHandle(hFile);
 		return EXIT_FAILURE;
 	}
@@ -463,7 +471,7 @@ int wmain(int argc, wchar_t* argv[])
 		}
 
 		printf("[+] Output written: %ls\n", argv[3]);
-		printf("[!] Header classification changed; runnable behavior is not guaranteed.\n");
+		printf("[!] DLL flag operation completed; runnable behavior is not guaranteed.\n");
 		printf("[!] Existing digital signatures may be invalidated; checksum unchanged.\n");
 	}
 
