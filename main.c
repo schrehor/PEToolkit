@@ -1,13 +1,158 @@
 #include <Windows.h>
 #include <stdio.h>
 #include <stddef.h> 
+#include <wchar.h>
+
+static BOOL WriteEditedCopy(
+	HANDLE input,
+	LONGLONG fileSize,
+	LONGLONG characteristicsOffset,
+	WORD characteristics,
+	const wchar_t* outputPath)
+{
+	LARGE_INTEGER position = { 0 };
+	BYTE buffer[65536];
+	LONGLONG remaining = fileSize;
+	BOOL success = FALSE;
+
+	if (!SetFilePointerEx(input, position, NULL, FILE_BEGIN))
+	{
+		fprintf(stderr, "[-] Rewind input - E%lu\n", GetLastError());
+		return FALSE;
+	}
+
+	HANDLE output = CreateFileW(
+		outputPath,
+		GENERIC_WRITE | DELETE,
+		0,
+		NULL,
+		CREATE_NEW,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL);
+
+	if (output == INVALID_HANDLE_VALUE)
+	{
+		fprintf(stderr, "[-] Create output - E%lu\n", GetLastError());
+		return FALSE;
+	}
+
+	while (remaining > 0)
+	{
+		DWORD requested = remaining > (LONGLONG)sizeof(buffer)
+			? (DWORD)sizeof(buffer)
+			: (DWORD)remaining;
+		DWORD bytesRead = 0;
+		DWORD bytesWritten = 0;
+
+		if (!ReadFile(input, buffer, requested, &bytesRead, NULL))
+		{
+			fprintf(stderr, "[-] Read input - E%lu\n", GetLastError());
+			goto cleanup;
+		}
+
+		if (bytesRead != requested)
+		{
+			fprintf(stderr, "[-] Input changed or copy read was incomplete\n");
+			goto cleanup;
+		}
+
+		if (!WriteFile(output, buffer, bytesRead, &bytesWritten, NULL))
+		{
+			fprintf(stderr, "[-] Write output - E%lu\n", GetLastError());
+			goto cleanup;
+		}
+
+		if (bytesWritten != bytesRead)
+		{
+			fprintf(stderr, "[-] Incomplete output write\n");
+			goto cleanup;
+		}
+
+		remaining -= bytesRead;
+	}
+
+	position.QuadPart = characteristicsOffset;
+	if (!SetFilePointerEx(output, position, NULL, FILE_BEGIN))
+	{
+		fprintf(stderr, "[-] Seek output - E%lu\n", GetLastError());
+		goto cleanup;
+	}
+
+	{
+		DWORD bytesWritten = 0;
+
+		if (!WriteFile(output, &characteristics, sizeof(characteristics),
+			&bytesWritten, NULL))
+		{
+			fprintf(stderr, "[-] Write characteristics - E%lu\n",
+				GetLastError());
+			goto cleanup;
+		}
+
+		if (bytesWritten != sizeof(characteristics))
+		{
+			fprintf(stderr, "[-] Incomplete characteristics write\n");
+			goto cleanup;
+		}
+	}
+
+	if (!FlushFileBuffers(output))
+	{
+		fprintf(stderr, "[-] Flush output - E%lu\n", GetLastError());
+		goto cleanup;
+	}
+
+	success = TRUE;
+
+cleanup:
+	if (!success)
+	{
+		FILE_DISPOSITION_INFO disposition = { 0 };
+		disposition.DeleteFile = TRUE;
+
+		if (!SetFileInformationByHandle(output, FileDispositionInfo,
+			&disposition, sizeof(disposition)))
+		{
+			fprintf(stderr, "[-] Could not remove incomplete output - E%lu\n",
+				GetLastError());
+		}
+	}
+
+	if (!CloseHandle(output))
+	{
+		fprintf(stderr, "[-] Close output - E%lu\n", GetLastError());
+		return FALSE;
+	}
+
+	return success;
+}
 
 int wmain(int argc, wchar_t* argv[])
 {
-	if (argc != 2)
+	if (argc != 2 && argc != 4)
 	{
-		fprintf(stderr, "Invalid number of arguments - Expected 1, got %d\n", argc - 1);
+		fprintf(stderr,
+			"Usage:\n"
+			"  PEToolkit.exe input\n"
+			"  PEToolkit.exe input --set-dll output\n"
+			"  PEToolkit.exe input --clear-dll output\n");
 		return EXIT_FAILURE;
+	}
+
+	BOOL editRequested = (argc == 4);
+	BOOL setDll = FALSE;
+
+	if (editRequested)
+	{
+		if (wcscmp(argv[2], L"--set-dll") == 0)
+		{
+			setDll = TRUE;
+		}
+		else if (wcscmp(argv[2], L"--clear-dll") != 0)
+		{
+			fprintf(stderr, "[-] Expected --set-dll or --clear-dll\n");
+			return EXIT_FAILURE;
+		}
 	}
 
 	HANDLE hFile = CreateFileW(
@@ -295,6 +440,32 @@ int wmain(int argc, wchar_t* argv[])
 	}
 
 	printf("[+] Entry-point RVA: 0x%08lx\n", entryPointRva);
+
+	if (editRequested)
+	{
+		WORD newCharacteristics = setDll
+			? (WORD)(fileHeader.Characteristics | IMAGE_FILE_DLL)
+			: (WORD)(fileHeader.Characteristics & ~IMAGE_FILE_DLL);
+
+		printf("[+] Requested characteristics: 0x%04x -> 0x%04x\n",
+			(unsigned int)fileHeader.Characteristics,
+			(unsigned int)newCharacteristics);
+
+		LONGLONG characteristicsOffset =
+			fileHeaderOffset +
+			(LONGLONG)offsetof(IMAGE_FILE_HEADER, Characteristics);
+
+		if (!WriteEditedCopy(hFile, liFileSize.QuadPart,
+			characteristicsOffset, newCharacteristics, argv[3]))
+		{
+			CloseHandle(hFile);
+			return EXIT_FAILURE;
+		}
+
+		printf("[+] Output written: %ls\n", argv[3]);
+		printf("[!] Header classification changed; runnable behavior is not guaranteed.\n");
+		printf("[!] Existing digital signatures may be invalidated; checksum unchanged.\n");
+	}
 
 	CloseHandle(hFile);
 
