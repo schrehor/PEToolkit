@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <stdio.h>
+#include <stddef.h> 
 
 int wmain(int argc, wchar_t* argv[])
 {
@@ -145,6 +146,96 @@ int wmain(int argc, wchar_t* argv[])
 		(unsigned int)fileHeader.Characteristics);
 	printf("[+] DLL flag: %s\n",
 		(fileHeader.Characteristics & IMAGE_FILE_DLL) ? "set" : "clear");
+
+	LONGLONG optionalHeaderOffset =
+		fileHeaderOffset + (LONGLONG)sizeof(fileHeader);
+
+	if (fileHeader.SizeOfOptionalHeader < sizeof(WORD) ||
+		(LONGLONG)fileHeader.SizeOfOptionalHeader >
+		liFileSize.QuadPart - optionalHeaderOffset)
+	{
+		fprintf(stderr, "[-] Invalid optional header size\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	WORD optionalMagic = 0;
+	if (!ReadFile(hFile, &optionalMagic, sizeof(optionalMagic),
+		&dwBytesRead, NULL))
+	{
+		fprintf(stderr, "[-] ReadFile(optional magic) - E%lu\n",
+			GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (dwBytesRead != sizeof(optionalMagic))
+	{
+		fprintf(stderr, "[-] Incomplete optional header magic\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+	{
+		printf("[+] Format: PE32\n");
+	}
+	else if (optionalMagic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+	{
+		printf("[+] Format: PE32+\n");
+	}
+	else
+	{
+		fprintf(stderr, "[-] Unsupported optional header magic - [%04x]\n",
+			(unsigned int)optionalMagic);
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	size_t entryPointOffset =
+		optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC
+		? offsetof(IMAGE_OPTIONAL_HEADER32, AddressOfEntryPoint)
+		: offsetof(IMAGE_OPTIONAL_HEADER64, AddressOfEntryPoint);
+
+	DWORD entryPointRva = 0;
+
+	if ((size_t)fileHeader.SizeOfOptionalHeader <
+		entryPointOffset + sizeof(entryPointRva))
+	{
+		fprintf(stderr, "[-] Optional header lacks entry-point field\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	LARGE_INTEGER entryPointPosition = { 0 };
+	entryPointPosition.QuadPart =
+		optionalHeaderOffset + (LONGLONG)entryPointOffset;
+
+	if (!SetFilePointerEx(hFile, entryPointPosition, NULL, FILE_BEGIN))
+	{
+		fprintf(stderr, "[-] SetFilePointerEx(entry point) - E%lu\n",
+			GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (!ReadFile(hFile, &entryPointRva, sizeof(entryPointRva),
+		&dwBytesRead, NULL))
+	{
+		fprintf(stderr, "[-] ReadFile(entry point) - E%lu\n",
+			GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (dwBytesRead != sizeof(entryPointRva))
+	{
+		fprintf(stderr, "[-] Incomplete entry-point field\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	printf("[+] Entry-point RVA: 0x%08lx\n", entryPointRva);
 
 	CloseHandle(hFile);
 
