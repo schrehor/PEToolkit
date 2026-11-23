@@ -113,6 +113,39 @@ int wmain(int argc, wchar_t* argv[])
 
 	printf("[+] DOS and PE signatures verified\n");
 
+	LONGLONG fileHeaderOffset =
+		peOffset.QuadPart + (LONGLONG)sizeof(peSignature);
+
+	if (liFileSize.QuadPart - fileHeaderOffset <
+		(LONGLONG)sizeof(IMAGE_FILE_HEADER))
+	{
+		fprintf(stderr, "[-] Truncated PE file header\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	IMAGE_FILE_HEADER fileHeader = { 0 };
+	if (!ReadFile(hFile, &fileHeader, sizeof(fileHeader),
+		&dwBytesRead, NULL))
+	{
+		fprintf(stderr, "[-] ReadFile(file header) - E%lu\n", GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (dwBytesRead != sizeof(fileHeader))
+	{
+		fprintf(stderr, "[-] Incomplete PE file header\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	printf("[+] Machine: 0x%04x\n", (unsigned int)fileHeader.Machine);
+	printf("[+] Characteristics: 0x%04x\n",
+		(unsigned int)fileHeader.Characteristics);
+	printf("[+] DLL flag: %s\n",
+		(fileHeader.Characteristics & IMAGE_FILE_DLL) ? "set" : "clear");
+
 	CloseHandle(hFile);
 
 	return EXIT_SUCCESS;
