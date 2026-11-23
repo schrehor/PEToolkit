@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="PEToolkit.vcxproj" />
+  <Project Path="PEToolkit.vcxproj" Id="ed6deaf0-0c83-4c5b-902b-a87b7dfb3358" />
 </Solution>

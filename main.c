@@ -5,7 +5,7 @@ int wmain(int argc, wchar_t* argv[])
 {
 	if (argc != 2)
 	{
-		fprintf(stderr, "%ls needs 1 argument\n", argv[0]);
+		fprintf(stderr, "Invalid number of arguments - Expected 1, got %d\n", argc - 1);
 		return EXIT_FAILURE;
 	}
 
@@ -24,6 +24,96 @@ int wmain(int argc, wchar_t* argv[])
 		fprintf(stderr, "[-] CreateFileW() - E%lu\n", GetLastError());
 		return EXIT_FAILURE;
 	}
+
+	LARGE_INTEGER liFileSize = { 0 };
+	if (!GetFileSizeEx(hFile, &liFileSize))
+	{
+		fprintf(stderr, "[-] GetFileSizeEx() - E%lu\n", GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+	printf("[+] File size: %lld bytes\n", liFileSize.QuadPart);
+
+	if (liFileSize.QuadPart < sizeof(IMAGE_DOS_HEADER))
+	{
+		fprintf(stderr, "[-] Invalid file size\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	IMAGE_DOS_HEADER iDosHeader = { 0 };
+	DWORD dwBytesRead = 0;
+	if (!ReadFile(
+		hFile,
+		&iDosHeader,
+		sizeof(IMAGE_DOS_HEADER),
+		&dwBytesRead,
+		NULL
+	)) {
+		fprintf(stderr, "[-] ReadFile() - E%lu\n", GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (sizeof(IMAGE_DOS_HEADER) != dwBytesRead)
+	{
+		fprintf(stderr, "[-] Invalid number of bytes read - [%lu]\n", dwBytesRead);
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (IMAGE_DOS_SIGNATURE != iDosHeader.e_magic)
+	{
+		fprintf(stderr, "[-] Invalid DOS signature - [%04x]\n", iDosHeader.e_magic);
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (iDosHeader.e_lfanew < (LONG)sizeof(IMAGE_DOS_HEADER) ||
+		(LONGLONG)iDosHeader.e_lfanew >
+		liFileSize.QuadPart - (LONGLONG)sizeof(DWORD))
+	{
+		fprintf(stderr, "[-] Invalid PE header offset\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	LARGE_INTEGER peOffset = { 0 };
+	peOffset.QuadPart = iDosHeader.e_lfanew;
+
+	if (!SetFilePointerEx(hFile, peOffset, NULL, FILE_BEGIN))
+	{
+		fprintf(stderr, "[-] SetFilePointerEx() - E%lu\n", GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	DWORD peSignature = 0;
+	if (!ReadFile(hFile, &peSignature, sizeof(peSignature),
+		&dwBytesRead, NULL))
+	{
+		fprintf(stderr, "[-] ReadFile(PE signature) - E%lu\n", GetLastError());
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (dwBytesRead != sizeof(peSignature))
+	{
+		fprintf(stderr, "[-] Incomplete PE signature\n");
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	if (peSignature != IMAGE_NT_SIGNATURE)
+	{
+		fprintf(stderr, "[-] Invalid PE signature - [%08lx]\n", peSignature);
+		CloseHandle(hFile);
+		return EXIT_FAILURE;
+	}
+
+	printf("[+] DOS and PE signatures verified\n");
+
+	CloseHandle(hFile);
 
 	return EXIT_SUCCESS;
 }
